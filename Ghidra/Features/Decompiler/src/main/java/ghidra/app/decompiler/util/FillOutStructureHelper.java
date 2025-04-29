@@ -63,16 +63,18 @@ public class FillOutStructureHelper {
 	private static final String DEFAULT_BASENAME = "astruct";
 	private static final String DEFAULT_CATEGORY = "/auto_structs";
 
+	private static final int DEFAULT_MAX_CALL_DEPTH = 3;
+
 	private Program currentProgram;
 	private TaskMonitor monitor;
 
-	private static final int maxCallDepth = 1;
-
+	private int maxCallDepth = DEFAULT_MAX_CALL_DEPTH;  
 	private int currentCallDepth;		// Current call depth (from root function)
 	private NoisyStructureBuilder componentMap = new NoisyStructureBuilder();
 	private HashMap<Address, Address> addressToCallInputMap = new HashMap<>();
 	private List<OffsetPcodeOpPair> storePcodeOps = new ArrayList<>();
 	private List<OffsetPcodeOpPair> loadPcodeOps = new ArrayList<>();
+	private Set<Address> processedFunctions = new HashSet<>();
 
 	/**
 	 * Constructor.
@@ -167,6 +169,7 @@ public class FillOutStructureHelper {
 		addressToCallInputMap = new HashMap<>();
 		storePcodeOps = new ArrayList<>();
 		loadPcodeOps = new ArrayList<>();
+		processedFunctions = new HashSet<>();
 	}
 
 	/**
@@ -244,28 +247,78 @@ public class FillOutStructureHelper {
 	 * @param decomplib is the active interface for decompiling
 	 */
 	private void pushIntoCalls(DecompInterface decomplib) {
-		AddressSet doneSet = new AddressSet();
-
-		while (addressToCallInputMap.size() > 0) {
-			currentCallDepth += 1;
-			if (currentCallDepth > maxCallDepth) {
-				return;
+		if (addressToCallInputMap.isEmpty()) {
+			return;
+		}
+		
+		Queue<Pair<Address, Address>> workQueue = new LinkedList<>();
+		
+		for (Map.Entry<Address, Address> entry : addressToCallInputMap.entrySet()) {
+			workQueue.add(new Pair<>(entry.getKey(), entry.getValue()));
+		}
+		
+		HashMap<Address, Address> originalMap = new HashMap<>(addressToCallInputMap);
+		addressToCallInputMap.clear();
+		
+		int callsProcessed = 0;
+		monitor.initialize(workQueue.size()); 
+		monitor.setMessage("Analyzing structure usage across function calls");
+		
+		while (!workQueue.isEmpty() && currentCallDepth < maxCallDepth) {
+			if (monitor.isCancelled()) {
+				Msg.info(this, "Structure analysis cancelled at depth " + currentCallDepth);
+				break;
 			}
-			HashMap<Address, Address> savedList = addressToCallInputMap;
-			addressToCallInputMap = new HashMap<>();
-			Set<Address> keys = savedList.keySet();
-			for (Address addr : keys) {
-				if (doneSet.contains(addr)) {
+			
+			Pair<Address, Address> entry = workQueue.poll();
+			Address funcAddr = entry.getFirst();
+			Address storageAddr = entry.getSecond();
+			
+			if (processedFunctions.contains(funcAddr)) {
 					continue;
 				}
-				doneSet.addRange(addr, addr);
-				Function func = currentProgram.getFunctionManager().getFunctionAt(addr);
-				Address storageAddr = savedList.get(addr);
+			processedFunctions.add(funcAddr);
+			
+			callsProcessed++;
+			monitor.setProgress(callsProcessed);
+			monitor.setMessage("Processing call " + callsProcessed + " at depth " + currentCallDepth);
+			
+			Function func = currentProgram.getFunctionManager().getFunctionAt(funcAddr);
+			if (func == null) {
+				continue;
+			}
+			
 				HighVariable paramHighVar = computeHighVariable(storageAddr, func, decomplib);
-				if (paramHighVar != null) {
+			if (paramHighVar == null) {
+				continue;
+			}
+			
+			addressToCallInputMap.clear();
+			
 					fillOutStructureDef(paramHighVar);
+			
+			if (!addressToCallInputMap.isEmpty() && currentCallDepth + 1 < maxCallDepth) {
+				currentCallDepth++;
+				
+				for (Map.Entry<Address, Address> newEntry : addressToCallInputMap.entrySet()) {
+					if (!processedFunctions.contains(newEntry.getKey())) {
+						workQueue.add(new Pair<>(newEntry.getKey(), newEntry.getValue()));
+						monitor.incrementProgress(1); // Update total work count
 				}
 			}
+				
+				Map<Address, Address> newCalls = new HashMap<>(addressToCallInputMap);
+				addressToCallInputMap.clear();
+				
+				addressToCallInputMap.putAll(originalMap);
+				
+				addressToCallInputMap.putAll(newCalls);
+			}
+		}
+
+		if (!workQueue.isEmpty()) {
+			Msg.info(this, "Maximum call depth (" + maxCallDepth + 
+				") reached, " + workQueue.size() + " additional calls not processed");
 		}
 	}
 
