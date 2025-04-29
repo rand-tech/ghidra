@@ -18,6 +18,7 @@ package ghidra.app.decompiler.util;
 import java.util.*;
 import java.util.Map.Entry;
 
+import generic.stl.Pair;
 import ghidra.app.cmd.label.RenameLabelCmd;
 import ghidra.app.decompiler.*;
 import ghidra.app.decompiler.component.DecompilerUtils;
