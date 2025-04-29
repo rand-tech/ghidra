@@ -272,8 +272,8 @@ public class FillOutStructureHelper {
 			}
 			
 			Pair<Address, Address> entry = workQueue.poll();
-			Address funcAddr = entry.getFirst();
-			Address storageAddr = entry.getSecond();
+			Address funcAddr = entry.first;
+			Address storageAddr = entry.second;
 			
 			if (processedFunctions.contains(funcAddr)) {
 					continue;
